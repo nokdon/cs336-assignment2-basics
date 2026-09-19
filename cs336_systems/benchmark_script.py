@@ -2,8 +2,26 @@ import argparse
 import torch
 from cs336_basics.model import (BasicsTransformerLM)
 from cs336_basics.optimizer import (AdamW)
-from cs336_basics.nn_utils import (cross_entropy)
+from cs336_basics.nn_utils import (cross_entropy,softmax)
 import timeit
+import torch.cuda.nvtx as nvtx
+import einx
+import cs336_basics.model
+import math
+from einops import einsum, rearrange
+
+@nvtx.range("scaled dot product attention")
+def annotated_scaled_dot_product_attention(Q,K,V,mask):
+    d_k = K.shape[-1]
+    with nvtx.range("computing attention scores:"):
+        attention_scores = einsum(Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
+
+    if mask is not None:
+        attention_scores = torch.where(mask, attention_scores, float("-inf"))
+    with nvtx.range("computing softmax"):
+        attention_weights = softmax(attention_scores, dim=-1)  # Softmax over the key dimension
+    with nvtx.range("final matmul"):
+        return einsum(attention_weights, V, "... query key, ... key d_v ->  ... query d_v")
 
 def main():
     #Hyperparameters-----------------------------------------------
@@ -36,6 +54,7 @@ def main():
 
     #Run model-------------------------------------------------------
 
+    cs336_basics.model.scaled_dot_product_attention = annotated_scaled_dot_product_attention
     model_obj = BasicsTransformerLM(args.vocab_size,args.context_length,
                 args.d_model,args.num_layers,args.num_heads,
                 args.d_ff).to(args.device)
@@ -43,17 +62,19 @@ def main():
     optimizer = AdamW(model_obj.parameters())
 
     #Modes-------------------------------------------------------------
-    
     if args.run == "f":
         for _ in range(args.w):
             logits_train = model_obj(X_train)
             torch.cuda.synchronize()
-        
+
         start_time = timeit.default_timer()
         #-----------
+
         for _ in range(args.n):
-            logits_train = model_obj(X_train)
-            torch.cuda.synchronize()
+            with nvtx.range("measured_step"):
+                with nvtx.range("forward"):
+                    logits_train = model_obj(X_train)
+                torch.cuda.synchronize()
 
 
     if args.run == "f_b":
@@ -64,14 +85,18 @@ def main():
             loss.backward()
             torch.cuda.synchronize()
         #-----------
-        
         start_time = timeit.default_timer()
+
         for _ in range(args.n):
-            optimizer.zero_grad()
-            logits_train = model_obj(X_train)
-            loss = cross_entropy(logits_train,Y_train)
-            loss.backward()
-            torch.cuda.synchronize()
+            with nvtx.range("measured_step"):
+                optimizer.zero_grad()
+                with nvtx.range("forward"):
+                    logits_train = model_obj(X_train)
+                with nvtx.range("loss"):
+                    loss = cross_entropy(logits_train,Y_train)
+                with nvtx.range("backward"):
+                    loss.backward()
+                torch.cuda.synchronize()
 
 
     if args.run == "full":
@@ -83,15 +108,20 @@ def main():
             optimizer.step()
             torch.cuda.synchronize()
         #-----------
-        
+
         start_time = timeit.default_timer()
         for _ in range(args.n):
-            optimizer.zero_grad()
-            logits_train = model_obj(X_train)
-            loss = cross_entropy(logits_train,Y_train)
-            loss.backward()
-            optimizer.step()
-            torch.cuda.synchronize()
+            with nvtx.range("measured_step"):
+                optimizer.zero_grad()
+                with nvtx.range("forward"):
+                    logits_train = model_obj(X_train)
+                with nvtx.range("loss"):
+                    loss = cross_entropy(logits_train,Y_train)
+                with nvtx.range("backward"):
+                    loss.backward()
+                with nvtx.range("optimizer_step"):
+                    optimizer.step()
+                torch.cuda.synchronize()
     #---------------------------------------------------------------------
     elapsed_time = timeit.default_timer() - start_time
     print(f"milliseconds per step {elapsed_time/args.n * 1_000}")
