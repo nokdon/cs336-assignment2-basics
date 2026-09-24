@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--device", type=str,default="cuda:0")
     parser.add_argument("--w", type=int, default=1)
     parser.add_argument("--n", type=int, default=1)
+    parser.add_argument("--autocast_bf16", action="store_true")
 
     args = parser.parse_args()
 
@@ -80,8 +81,9 @@ def main():
     if args.run == "f_b":
         for _ in range(args.w):
             optimizer.zero_grad()
-            logits_train = model_obj(X_train)
-            loss = cross_entropy(logits_train,Y_train)
+            with torch.autocast(device_type="cuda",dtype=torch.bfloat16,enabled=args.autocast_bf16):
+                logits_train = model_obj(X_train)
+                loss = cross_entropy(logits_train,Y_train)
             loss.backward()
             torch.cuda.synchronize()
         #-----------
@@ -90,10 +92,11 @@ def main():
         for _ in range(args.n):
             with nvtx.range("measured_step"):
                 optimizer.zero_grad()
-                with nvtx.range("forward"):
-                    logits_train = model_obj(X_train)
-                with nvtx.range("loss"):
-                    loss = cross_entropy(logits_train,Y_train)
+                with torch.autocast(device_type="cuda",dtype=torch.bfloat16,enabled=args.autocast_bf16):
+                    with nvtx.range("forward"):
+                        logits_train = model_obj(X_train)
+                    with nvtx.range("loss"):
+                        loss = cross_entropy(logits_train,Y_train)
                 with nvtx.range("backward"):
                     loss.backward()
                 torch.cuda.synchronize()
@@ -102,8 +105,9 @@ def main():
     if args.run == "full":
         for _ in range(args.w):
             optimizer.zero_grad()
-            logits_train = model_obj(X_train)
-            loss = cross_entropy(logits_train,Y_train)
+            with torch.autocast(device_type="cuda",dtype=torch.bfloat16,enabled=args.autocast_bf16):
+                logits_train = model_obj(X_train)
+                loss = cross_entropy(logits_train,Y_train)
             loss.backward()
             optimizer.step()
             torch.cuda.synchronize()
@@ -113,10 +117,11 @@ def main():
         for _ in range(args.n):
             with nvtx.range("measured_step"):
                 optimizer.zero_grad()
-                with nvtx.range("forward"):
-                    logits_train = model_obj(X_train)
-                with nvtx.range("loss"):
-                    loss = cross_entropy(logits_train,Y_train)
+                with torch.autocast(device_type="cuda",dtype=torch.bfloat16,enabled=args.autocast_bf16):
+                    with nvtx.range("forward"):
+                        logits_train = model_obj(X_train)
+                    with nvtx.range("loss"):
+                        loss = cross_entropy(logits_train,Y_train)
                 with nvtx.range("backward"):
                     loss.backward()
                 with nvtx.range("optimizer_step"):

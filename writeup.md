@@ -20,3 +20,19 @@ Problem (nsys_profile):
 
 Problem (mixed_precision_accumulation):
     In the first tow cases, float32 gives more accurate result than 16 (trivially). The third and fourth cases are more interesting because they use mix precisions. When s is float 32 and the value is float16, PyTorch preforms addition in float32 and keeps s in float32., while the error lies in precision of the value (x.type = float16). Ofc casting x to float32 after it assigned to float16 do not recover precision
+Problem (benchmarking_mixed_precision):
+    a)
+    1) model parameters: fp32
+    2) first ffl: fp16
+    3) layer_norm: fp32
+    4) logits: fp16
+    5) loss: fp32 if cross_entropy
+    6) gradient: fp32 if we are talking about model.parameters and .grad
+    b)
+    Still we gonna use fp32 for layernorm. bf16 has much broader range than fp16, but precision is worse. For layer norm precision is essential due to computing mean and variance which are sensetive to rounding
+    c)  MODEL        fp32        bf16
+        small        57,94       44,04        1,32×
+        medium      160,33       81,55        1,97×
+        large       369,70      130,50        2,83×
+        xl         1044,42      213,65        4,89×
+        10B        3660,03      590,66        6,20×
