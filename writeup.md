@@ -30,9 +30,25 @@ Problem (benchmarking_mixed_precision):
     6) gradient: fp32 if we are talking about model.parameters and .grad
     b)
     Still we gonna use fp32 for layernorm. bf16 has much broader range than fp16, but precision is worse. For layer norm precision is essential due to computing mean and variance which are sensetive to rounding
-    c)  MODEL        fp32        bf16
+    c)  MODEL       fp32|ms    bf16|ms
         small        57,94       44,04        1,32×
         medium      160,33       81,55        1,97×
         large       369,70      130,50        2,83×
         xl         1044,42      213,65        4,89×
         10B        3660,03      590,66        6,20×
+    BF16 was faster for all five models. Icreasing from 1.32x for small to 6.20x for 10B. I think wider layers benefit more because their matmul work grows faster than many elementwise operations, and BF16 makes these matmuls faster. Larger matmuls can also use GPU more efficiently making launching operations relatively less important
+Problem (memory_profiling):
+    a) context_length 128: inference memory usage is almost constant except few small spikes. Weights occupy most of memory and activations aren't saved for backward. Full training: memory grows slightly during forward, much bigger grow during backward and stays near its peak with small spikes on optimizer step. Before next forward pass memory drops due to zero_grad
+    b)  f_ctx128_fp32:        12.8 GB
+        f_ctx2048_fp32:       14.9 GB
+        full_ctx128_fp_32:    51.3 GB
+        full_ctx2048_fp_32:   91.3 GB
+        For ctx2048, activations that grow linearly with context are 16x bigger, but attention matrices are 16*16=256x bigger compared to ctx128. So the higher peaks due to storing these activations, not gradients itself. And the big drop during backward comes from freeing forward activations, not from clearing gradients
+    c)  f_ctx128_fp32:        12.8 GB | bf16: 19.0 GB | +49.3%
+        f_ctx2048_fp32:       14.9 GB | bf16: 20.5 GB | +37.2%
+        full_ctx128_fp_32:    51.3 GB | bf16: 51.3 GB | +0%
+        full_ctx2048_fp_32:   91.3 GB | bf16: 82.4 GB | -9.5%
+        Mixed precision does not always reduce memory usage. Autocast keeps the original FP32 weights and creates BF16 copies for some operations, which adds memory and explains the higher inferencepeaks. However, some activations are stored only in BF16, so at ctx2048 the savings on activations outweigh the extra copies and reduce the training peak, while at ctx128 it stays almost unchanged
+    d) batch_size x context_length x d_model  * 4 / 1024^2
+        -> ctx128: 1.25 MiB | ctx2048 -> 20 MiB . batch_size = 1
+    e) ctx2048: the largest allocation I observed were 512 MiB and each came from tensors used in attention computation: einsumm, masking(torch.where), sotmax

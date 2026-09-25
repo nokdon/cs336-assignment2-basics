@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--w", type=int, default=1)
     parser.add_argument("--n", type=int, default=1)
     parser.add_argument("--autocast_bf16", action="store_true")
+    parser.add_argument("--memory_prof", action="store_true")
 
     args = parser.parse_args()
 
@@ -63,21 +64,27 @@ def main():
     optimizer = AdamW(model_obj.parameters())
 
     #Modes-------------------------------------------------------------
+    #--------------------------forward----------------------------------
     if args.run == "f":
-        for _ in range(args.w):
-            logits_train = model_obj(X_train)
-            torch.cuda.synchronize()
-
-        start_time = timeit.default_timer()
-        #-----------
-
-        for _ in range(args.n):
-            with nvtx.range("measured_step"):
-                with nvtx.range("forward"):
+        with torch.no_grad():
+            for _ in range(args.w):
+                with torch.autocast(device_type="cuda",dtype=torch.bfloat16,enabled=args.autocast_bf16):
                     logits_train = model_obj(X_train)
                 torch.cuda.synchronize()
 
+            #-----------
+            torch.cuda.memory._record_memory_history(max_entries=1_000_000,
+                                enabled="all" if args.memory_prof else None)
+            start_time = timeit.default_timer()
 
+            for _ in range(args.n):
+                with nvtx.range("measured_step"):
+                    with nvtx.range("forward"):
+                        with torch.autocast(device_type="cuda",dtype=torch.bfloat16,enabled=args.autocast_bf16):
+                            logits_train = model_obj(X_train)
+                    torch.cuda.synchronize()
+
+    #----------------------forward-backward-----------------------------
     if args.run == "f_b":
         for _ in range(args.w):
             optimizer.zero_grad()
@@ -101,7 +108,7 @@ def main():
                     loss.backward()
                 torch.cuda.synchronize()
 
-
+    #--------------------forward-backward-step-------------------------
     if args.run == "full":
         for _ in range(args.w):
             optimizer.zero_grad()
@@ -112,7 +119,8 @@ def main():
             optimizer.step()
             torch.cuda.synchronize()
         #-----------
-
+        torch.cuda.memory._record_memory_history(max_entries=1_000_000,
+                    enabled="all" if args.memory_prof else None)
         start_time = timeit.default_timer()
         for _ in range(args.n):
             with nvtx.range("measured_step"):
@@ -128,7 +136,15 @@ def main():
                     optimizer.step()
                 torch.cuda.synchronize()
     #---------------------------------------------------------------------
+
+
     elapsed_time = timeit.default_timer() - start_time
+    if args.memory_prof:
+        precision = "bf16" if args.autocast_bf16 else "fp32"
+        snapshot_name = f"memory_{args.run}_ctx{args.context_length}_{precision}.pickle"
+
+        torch.cuda.memory._dump_snapshot(snapshot_name)
+        torch.cuda.memory._record_memory_history(enabled=None)
     print(f"milliseconds per step {elapsed_time/args.n * 1_000}")
 if __name__ == "__main__":
     main()
