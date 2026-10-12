@@ -52,3 +52,27 @@ Problem (memory_profiling):
     d) batch_size x context_length x d_model  * 4 / 1024^2
         -> ctx128: 1.25 MiB | ctx2048 -> 20 MiB . batch_size = 1
     e) ctx2048: the largest allocation I observed were 512 MiB and each came from tensors used in attention computation: einsumm, masking(torch.where), sotmax
+Problem (pytorch_attention):
+    d=16, seq=256: forward=0.394 ms, backward=0.795 ms, memory=20.77 MiB
+    d=16, seq=1024: forward=3.104 ms, backward=7.627 ms, memory=82.34 MiB
+    d=16, seq=4096: forward=46.680 ms, backward=117.838 ms, memory=1048.63 MiB
+    d=16, seq=8192: OOM
+    d=16, seq=16384: OOM
+    d=32, seq=256: forward=0.368 ms, backward=0.733 ms, memory=21.27 MiB
+    d=32, seq=1024: forward=3.174 ms, backward=7.825 ms, memory=84.34 MiB
+    d=32, seq=4096: OOM
+    d=32, seq=8192: OOM
+    d=32, seq=16384: OOM
+    d=64, seq=256: forward=0.352 ms, backward=0.802 ms, memory=22.27 MiB
+    d=64, seq=1024: forward=3.319 ms, backward=8.058 ms, memory=88.34 MiB
+    d=64, seq=4096: forward=52.197 ms, backward=125.369 ms, memory=1072.63 MiB
+    d=64, seq=8192: OOM
+    d=64, seq=16384: OOM
+    d=128, seq=256: forward=0.444 ms, backward=1.136 ms, memory=24.27 MiB
+    d=128, seq=1024: forward=3.911 ms, backward=8.826 ms, memory=96.34 MiB
+    d=128, seq=4096: forward=60.490 ms, backward=135.246 ms, memory=1104.63 MiB
+    d=128, seq=8192: OOM
+    d=128, seq=16384: OOM
+    512ЬMiB*5 + (3+1+3)*4MiB (for d=32,seq_len=4096)
+    The OOM in d=32.seq=4096 is due to fragmentation.The largest free blocks were 508 MiB and 500 MiB, while the requested allocation was 512 MiB
+    The problem of the size is in seq_len size. To reduce memory allocation we need to find a way not to store seq_len^2
